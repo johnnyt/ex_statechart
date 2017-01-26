@@ -17,7 +17,7 @@ defmodule StateChartTest do
       sc
       |> Model.new()
       |> Interpreter.new()
-      # |> run(test)
+      |> run(test)
     end
   end
 
