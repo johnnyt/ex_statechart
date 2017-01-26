@@ -7,5 +7,7 @@ before_script:
   - MIX_ENV=test make generate
 cache:
   directories:
+    - _build
+    - deps
     - saxon
     - test/scxml_w3/cases
