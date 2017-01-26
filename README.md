@@ -1,4 +1,4 @@
-# StateChart
+# state_chart [![Build Status](https://travis-ci.org/camshaft/ex_statechart.svg?branch=master)](https://travis-ci.org/camshaft/ex_statechart)
 
 **TODO: Add description**
 
