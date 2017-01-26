@@ -1,4 +1,4 @@
-defmodule Test.StateChart.W3.Case do
+defmodule Test.StateChart.Case do
   use ExUnit.CaseTemplate, async: true
 
   using do
@@ -7,7 +7,7 @@ defmodule Test.StateChart.W3.Case do
     end
   end
 
-  def test_w3_xml(xml, description) do
+  def test_scxml(xml, description, initial_state, events) do
     true
   end
 end

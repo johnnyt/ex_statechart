@@ -10,7 +10,7 @@ module = Module.concat(["Test.StateChart.W3", Macro.camelize(spec), Macro.cameli
 
 bin = quote do
   defmodule unquote(module) do
-    use Test.StateChart.W3.Case
+    use Test.StateChart.Case
 
     @tag :scxml_w3
     @tag conformance: unquote(conformance), spec: unquote(spec)
@@ -19,7 +19,7 @@ bin = quote do
 
       description = unquote(File.read!(description))
 
-      test_w3_xml(xml, description)
+      test_scxml(xml, description, ["pass"], [])
     end
   end
 end
