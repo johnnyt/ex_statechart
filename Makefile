@@ -20,7 +20,7 @@ test/scxml_w3/cases/.manifest: test/scxml_w3/cases/manifest.xml test/scxml_w3/ma
 	@mix run test/scxml_w3/manifest.exs test/scxml_w3/cases/manifest.xml $@ $(W3_SUITE)
 
 saxon/saxon9he.jar:
-	@mkdir saxon
+	@mkdir -p saxon
 	@curl -L https://downloads.sourceforge.net/project/saxon/Saxon-HE/9.7/SaxonHE9-7-0-14J.zip -o saxon/saxon.zip
 	@unzip -o saxon/saxon.zip -d saxon
 
