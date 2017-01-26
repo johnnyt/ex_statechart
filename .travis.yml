@@ -5,7 +5,7 @@ elixir:
   - 1.4.0
 before_install:
   - sudo apt-get -qq update
-  - sudo apt-get install -y saxonb
+  - sudo apt-get install -y libsaxon-java
 before_script:
   - make generate
 cache:
