@@ -26,4 +26,6 @@ test/scxml_w3/cases/manifest.xml:
 clean:
 	@rm -rf test/scxml_w3/cases
 
+test/scxml_w3/manifest.exs: ;
+
 .PHONY: clean
