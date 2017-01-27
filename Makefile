@@ -31,12 +31,17 @@ test/scxml_w3/cases/manifest.xml:
 	@mkdir -p test/scxml_w3/cases
 	curl -L $(W3_SUITE)/manifest.xml -o $@
 
-test/scion/cases:
+test/scion/cases: Makefile
+	@rm -rf test/scion/cases
 	@git clone $(SCION_SUITE) test/scion/.cases
 	@rm -rf test/scion/.cases/test/w3c-ecma-in-review
 	@rm -rf test/scion/.cases/test/w3c-ecma-modified
 	@rm -rf test/scion/.cases/test/w3c-ecma
 	@mv test/scion/.cases/test test/scion/cases
+
+	@# Remove the root transition - not supported
+	@sed -i.bak -e '25,28d' test/scion/cases/internal-transitions/test0.scxml
+
 	@rm -rf test/scion/.cases
 
 saxon/saxon9he.jar:
