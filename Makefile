@@ -21,7 +21,8 @@ test/scion/cases/.cases: $(SCION_JSON) test/scion/cases.exs
 	@touch $@
 
 %.scxml: %.txml test/scxml_w3/conf_elixir.xsl
-	java -jar saxon/saxon9he.jar --suppressXsltNamespaceCheck:on -s:$< -xsl:test/scxml_w3/conf_elixir.xsl -o:$@
+	@java -jar saxon/saxon9he.jar --suppressXsltNamespaceCheck:on -s:$< -xsl:test/scxml_w3/conf_elixir.xsl -o:$@
+	@echo $@
 
 test/scxml_w3/cases/.manifest: test/scxml_w3/cases/manifest.xml test/scxml_w3/manifest.exs
 	@mix run test/scxml_w3/manifest.exs test/scxml_w3/cases/manifest.xml $@ $(W3_SUITE)

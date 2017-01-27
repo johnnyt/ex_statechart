@@ -4,20 +4,19 @@ defmodule StateChart.Interpreter do
     quote do
       # TODO add int info (sessionid, name?)
       int = unquote(int)
-      Logger.debug(fn -> unquote(message) end)
+      # Logger.debug(fn -> unquote(message) end)
       int
     end
   end
 
-  alias StateChart.{DataModel,Event,Invocation,Model,Queue}
-  alias Model.{Transition,State}
+  alias StateChart.{Context,Event,Document,Queue,Runtime.Invoke}
+  alias Document.{Transition,State}
 
   defstruct [
-    model: nil,
+    document: nil,
     internal_events: Queue.new(),
 
     configuration: MapSet.new(),
-    data_model: %{},
     history: %{},
     running?: true
   ]
@@ -26,61 +25,59 @@ defmodule StateChart.Interpreter do
   Create an interpreter from a document  
   """
 
-  def new(%Model{} = model, data_model \\ %{}) do
-    %__MODULE__{model: model, data_model: data_model}
+  def new(%Document{} = document) do
+    %__MODULE__{document: document}
   end
 
   @doc """
   Start evaluation of the interpreter
   """
 
-  def start(%__MODULE__{model: %Model{initial: initial}} = int) do
+  def start(%__MODULE__{document: %Document{initial: initial}} = int, context) do
     debug(int, "-> START")
-    enter_states(int, initial)
+    enter_states(int, initial, context)
   end
 
   @doc """
   Handle an external event
   """
 
-  def handle_event(%__MODULE__{} = int, event) do
-    {transitions, int} = int
-    |> put_event(event)
-    |> debug("handle_event: #{inspect(event.name)}")
-    |> invoke_event(event)
-    |> select_transitions(event)
-
-    microstep(int, transitions)
+  def handle_event(%__MODULE__{} = int, event, context) do
+    context = Context.put_event(context, event)
+    {int, context} = invoke_event(int, event, context)
+    transitions = select_transitions(int, event, context)
+    microstep(int, transitions, context)
   end
 
   @doc """
   Resume execution after a :sync
   """
 
-  def resume(%__MODULE__{internal_events: events} = int) do
+  def resume(%__MODULE__{running?: false} = int, context) do
+    {:stop, int, context}
+  end
+  def resume(%__MODULE__{internal_events: events} = int, context) do
     debug(int, "-> RESUME")
-    case {select_eventless_transitions(int), int} do
+    case {select_eventless_transitions(int, context), int} do
       {[], %{internal_events: %Queue{size: 0}, running?: false} = int} ->
-        stop(int)
+        stop(int, context)
       {[], %{internal_events: %Queue{size: 0}} = int} ->
-        case invoke_states(int) do
+        case invoke_states(int, context) do
           %{internal_events: %Queue{size: 0}} = int ->
             debug(int, "<- AWAIT")
-            {:await, int}
+            {:await, int, context}
           int ->
-            resume(int)
+            resume(int, context)
         end
       {[], %{internal_events: events} = int} ->
         {event, events} = Queue.dequeue(events)
-        
-        {transitions, int} = %{int | events: events}
-        |> put_event(event)
+        context = Context.put_event(context, event)
+        transitions = %{int | events: events}
         |> debug("handle_event: #{inspect(event.name)}")
-        |> select_transitions(event)
-
-        microstep(int, transitions)
+        |> select_transitions(event, context)
+        microstep(int, transitions, context)
       {transitions, int} ->
-        microstep(int, transitions)
+        microstep(int, transitions, context)
     end
   end
 
@@ -88,24 +85,19 @@ defmodule StateChart.Interpreter do
   Cleans up the interpreter
   """
 
-  def stop(%__MODULE__{configuration: configuration} = int) do
-    int = configuration
+  def stop(%__MODULE__{configuration: configuration} = int, context) do
+    context = configuration
     |> Enum.sort(&!State.compare(&1, &2))
-    |> Enum.reduce(int, fn
-      (%State{on_exit: oe, invocations: invs} = state, int) ->
-        int = Enum.reduce(oe, int, &execute_content(&2, &1))
-        int = Enum.reduce(invs, int, &cancel_invocation(&2, &1))
-        if final_state?(state) && root?(state) do
-          return_done_event(int, nil)
-        else
-          int
-        end
+    |> Enum.reduce(context, fn
+      (%State{invocations: invs} = state, context) ->
+        context = State.on_exit(state, context)
+        Enum.reduce(invs, context, &cancel_invocation(&2, &1))
     end)
-    {:stop, %{int | configuration: [], running?: false}}
+    {:stop, %{int | configuration: [], running?: false}, context}
   end
 
-  defp invoke_event(int, event) do
-    int
+  defp invoke_event(int, event, context) do
+    {int, context}
   end
   # defp invoke_event(%{configuration: configuration} = int, %Event{invoke_id: id} = event) do
   #   Enum.reduce(configuration, int, fn(%State{invocations: invs}, int) ->
@@ -119,9 +111,9 @@ defmodule StateChart.Interpreter do
   #     end)
   #   end)
   # end
-  
-  defp invoke_states(int) do
-    int
+
+  defp invoke_states(int, context) do
+    {int, context}
   end
   # defp invoke_states(%{to_invoke: to_invoke} = int) do
   #   Enum.reduce(to_invoke, int, fn(%State{invocations: invs}, int) ->
@@ -129,15 +121,10 @@ defmodule StateChart.Interpreter do
   #   end)
   # end
 
-  defp return_done_event(int, data) do
-    # TODO
-    int
-  end
-
-  defp select_eventless_transitions(%{configuration: conf, model: model, data_model: data_model = int}) do
-    selected = Model.transitions_by(model, conf, fn
+  defp select_eventless_transitions(%{configuration: conf, document: document} = int, context) do
+    selected = Document.transitions_by(document, conf, fn
       (%Transition{event: nil} = transition) ->
-        Transition.on_condition(transition, data_model)
+        Transition.on_condition(transition, context)
       (_) ->
         false
     end)
@@ -145,94 +132,60 @@ defmodule StateChart.Interpreter do
     selected
   end
 
-  defp select_transitions(%{configuration: conf, model: model, data_model: data_model} = int, %Event{name: name}) do
-    selected = Model.transitions_by(model, conf, fn
-      (%Transition{conditions: conditions} = transition) ->
-        Transition.match?(transition, name) && Transition.on_condition(transition, data_model)
+  defp select_transitions(%{configuration: conf, document: document} = int, %Event{name: name}, context) do
+    selected = Document.transitions_by(document, conf, fn
+      (%Transition{} = transition) ->
+        Transition.match?(transition, name) && Transition.on_condition(transition, context)
       (_) ->
         false
     end)
     debug(int, "select_transitions: #{inspect(selected)}")
-    {selected, int}
+    selected
   end
 
-  defp microstep(int, transitions) do
-    int
-    |> exit_states(transitions)
-    |> execute_transitions(transitions)
-    |> enter_states(transitions)
+  defp microstep(int, transitions, context) do
+    {int, context} = exit_states(int, transitions, context)
+    {int, context} = execute_transitions(int, transitions, context)
+    enter_states(int, transitions, context)
   end
 
   defp exit_states(
-    %{model: model, configuration: conf, data_model: data_model, history: history} = int,
-    transitions
+    %{document: document, configuration: conf, history: history} = int,
+    transitions,
+    context
   ) do
-
-    {states, conf} = Model.exit_states(model, conf, transitions)
-    {history, data_model} = Enum.reduce(states, {data_model, history}, fn(state, {data_model, history}) ->
-      data_model = State.on_exit(state, data_model)
+    {states, conf} = Document.exit_states(document, conf, transitions)
+    {context, history} = Enum.reduce(states, {context, history}, fn(state, {context, history}) ->
+      context = State.on_exit(state, context)
       # TODO add history if present
-      {data_model, history}
+      {context, history}
     end)
     debug(int, "exit_states: #{inspect(Enum.map(states, &Map.get(&1, :id)))}")
 
-    %{int | data_model: data_model, configuration: conf, history: history}
+    {%{int | configuration: conf, history: history}, context}
   end
 
-  defp execute_transitions(%{data_model: data_model} = int, transitions) do
-    data_model = Enum.reduce(transitions, data_model, &Transition.on_transition/2)
+  defp execute_transitions(int, transitions, context) do
+    context = Enum.reduce(transitions, context, &Transition.on_transition/2)
     debug(int, "execute_transitions")
-    %{int | data_model: data_model}
+    {int, context}
   end
 
-  defp enter_states(%{model: model, configuration: conf, data_model: data_model, history: history} = int, transitions) do
-    {states, conf} = Model.enter_states(model, conf, history, transitions)
-    data_model = Enum.reduce(states, data_model, &State.on_enter/2)
+  defp enter_states(%{document: document, configuration: conf, history: history} = int, transitions, context) do
+    {states, conf} = Document.enter_states(document, conf, history, transitions)
+    context = Enum.reduce(states, context, &State.on_enter/2)
     debug(int, "enter_states: #{inspect(Enum.map(states, &Map.get(&1, :id)))}")
     debug(int, "<- SYNC")
-    {:sync, %{int | data_model: data_model, configuration: conf}}
+    {:sync, %{int | configuration: conf}, context}
   end
 
-  defp final_state?(state) do
-    # TODO
-    false
-  end
-
-  defp root?(state) do
-    # TODO
-    false
-  end
-
-  defp execute_content(int, content) do
+  defp invoke(int, %Invoke{}) do
     # TODO
     int
   end
 
-  defp apply_finalize(int, invocation, event) do
+  defp cancel_invocation(int, %Invoke{}) do
     # TODO
     int
-  end
-
-  defp send(int, id, event) do
-    # TODO
-    int
-  end
-
-  defp invoke(int, %Invocation{}) do
-    # TODO
-    int
-  end
-
-  defp cancel_invocation(int, %Invocation{}) do
-    # TODO
-    int
-  end
-
-  defp exit_order(list) do
-    :lists.reverse(list)
-  end
-
-  defp put_event(%{data_model: dm} = int, value) do
-    %{int | data_model: DataModel.put_event(dm, value)}
   end
 end

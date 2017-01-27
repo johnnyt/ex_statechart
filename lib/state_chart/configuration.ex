@@ -1,5 +1,5 @@
 defmodule StateChart.Configuration do
-  alias StateChart.{Interpreter,Model.State}
+  alias StateChart.{Interpreter,Document.State}
 
   def active_states(%Interpreter{configuration: conf}) do
     active_states(conf)

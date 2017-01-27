@@ -6,21 +6,28 @@ name = Path.basename(name, ".json")
 out = Path.join([test_dir, suite, cases, spec, name <> "_test.exs"])
 xml = Path.join([test_dir, suite, cases, spec, name <> ".scxml"])
 
-module = Module.concat(["Test.StateChart.Suite", Macro.camelize(spec), Macro.camelize(name)])
+spec = spec |> String.replace("-", "_")
+
+module = Module.concat(["Test.StateChart.Scion", Macro.camelize(spec), Macro.camelize(name)])
+
+%{"initialConfiguration" => conf,
+  "events" => events} =
+  input |> File.read!() |> Poison.decode!()
+
+events = Enum.map(events, fn(%{"event" => e, "nextConfiguration" => conf}) ->
+  {e, conf}
+end)
 
 bin = quote do
   defmodule unquote(module) do
     use Test.StateChart.Case
 
-    @tag :suite
-    @tag spec: unquote(spec)
+    @tag :scion
+    @tag spec: unquote(Macro.underscore(spec))
     test unquote(name) do
       xml = unquote(File.read!(xml))
-      %{"initialConfiguration" => conf,
-        "events" => events} =
-        unquote(input |> File.read!() |> Poison.decode!())
 
-      test_scxml(xml, "", conf, events)
+      test_scxml(xml, "", unquote(Macro.escape(conf)), unquote(Macro.escape(events)))
     end
   end
 end

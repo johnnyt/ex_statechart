@@ -1,5 +1,6 @@
-defmodule StateChart.Model.Analyzer do
-  alias StateChart.Model.{State,Transition}
+defmodule StateChart.Document.Analyzer do
+  alias StateChart.Document.{State,Transition}
+  alias StateChart.Runtime.Invoke
 
   @doc """
   Traverse the model
@@ -12,24 +13,56 @@ defmodule StateChart.Model.Analyzer do
     |> resolve_references()
   end
 
-  defp traverse(model, state, ancestors) do
-    {state, model} = put_state(model, State.new(state, ancestors, generate_id(model)))
-    %{id: id, children: children} = state
+  def on_enter(model, state, ancestors) do
+    {state, model} = put_state(model, state)
+    %{id: id} = state
     ancestors = [id | ancestors]
-    {children, model} = Enum.map_reduce(children, model, &traverse(&2, &1, ancestors))
+    {model, state, ancestors}
+  end
+
+    # children: [],
+    # initial: nil,
+    # invocations: [],
+    # on_entry: [],
+    # on_exit: [],
+    # transitions: [],
+
+  def on_exit(model, state, children) do
+    # TODO don't nuke the previous values in the state
+    {children, invocations, on_entry, on_exit, transitions} =
+      Enum.reduce(children, {[], [], [], [], []}, fn
+        (%State{} = s, {c, i, e, x, t}) -> {[s | c], i, e, x, t}
+        (%Invoke{} = s, {c, i, e, x, t}) -> {c, [s | i], e, x, t}
+        ({:on_entry, s}, {c, i, e, x, t}) -> {c, i, :lists.reverse(s) ++ e, x, t}
+        ({:on_exit, s}, {c, i, e, x, t}) -> {c, i, e, :lists.reverse(s) ++ x, t}
+        (%Transition{} = s, {c, i, e, x, t}) -> {c, i, e, x, [s | t]}
+      end)
+
+    children = :lists.reverse(children)
+
     descendants = Enum.flat_map(children, fn(%{id: id, descendants: d}) -> [id | d] end)
 
     %{state |
+      children: children,
       descendants: descendants,
       descendants_set: MapSet.new(descendants),
-      children: children}
+      invocations: invocations,
+      on_entry: on_entry,
+      on_exit: on_exit,
+      transitions: transitions}
     |> handle_initial_composite()
     |> handle_history_composite()
     |> update_model(model)
   end
 
+  defp traverse(model, state, ancestors) do
+    {model, %{children: children} = state, ancestors} = on_enter(model, state, ancestors)
+    {children, model} = Enum.map_reduce(children, model, &traverse(&2, &1, ancestors))
+    on_exit(model, state, children)
+  end
+
   defp put_state(%{initial: nil} = model, %{id: id} = state) do
-    %{model | initial: [%Transition{priority: {0, 0}, scope: id, source: :__start__, targets: [id]}]}
+    %{model | initial: [%Transition{priority: {0, 0}, scope: id, source: :__start__, target: [id]}]}
     |> put_state(state)
   end
   defp put_state(%{states: s} = model, %{id: id} = state) do
@@ -46,17 +79,8 @@ defmodule StateChart.Model.Analyzer do
     {state, %{model | states: s}}
   end
 
-  defp generate_id(%{states: s}) do
-    fn -> generate_id(s, map_size(s)) end
-  end
-  defp generate_id(states, count) do
-    id = "_@s#{count}"
-    case Map.fetch(states, id) do
-      :error ->
-        id
-      _ ->
-        generate_id(states, count + 1)
-    end
+  def ref(%{states: s}) do
+    map_size(s)
   end
 
   defp handle_initial_composite(%{type: :composite, children: [first | _] = children} = state) do

@@ -1,15 +1,16 @@
-defmodule StateChart.Model do
-  alias __MODULE__.{Analyzer,Query,State,Transition}
-
-  defstruct [
-    initial: nil,
-    states: %{}
-  ]
-
-  def new(root) do
-    %__MODULE__{}
-    |> Analyzer.analyze(root)
+defmodule StateChart.Document do
+  use StateChart.Definition do
+    enum Binding, :binding, 1, [
+      early: 0,
+      late: 1
+    ]
+    field(map(:var, __MODULE__.Data), :datamodel, 2)
+    repeated(__MODULE__.Transition, :initial, 3)
+    field(:string, :name, 4)
+    field(map(:ref, __MODULE__.State), :states, 5)
   end
+
+  alias __MODULE__.{Analyzer,Query,State,Transition}
 
   def resolve(_, %State{} = s) do
     s

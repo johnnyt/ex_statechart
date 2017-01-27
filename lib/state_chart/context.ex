@@ -1,10 +1,10 @@
-defprotocol StateChart.DataModel do
+defprotocol StateChart.Context do
   def put_event(model, event)
   def query(model, query)
   def execute(model, command)
 end
 
-defimpl StateChart.DataModel, for: Map do
+defimpl StateChart.Context, for: Map do
   def put_event(model, event) do
     Map.put(model, "_event", event)
   end

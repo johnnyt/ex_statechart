@@ -27,9 +27,4 @@ defmodule StateChart do
       %{acc | type: v}
     end
   end
-
-  defmodule Invocation do
-    defstruct [:autoforward, :id, :invoke_id]
-  end
-
 end
