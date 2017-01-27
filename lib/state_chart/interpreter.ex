@@ -35,7 +35,7 @@ defmodule StateChart.Interpreter do
 
   def start(%__MODULE__{document: %Document{initial: initial}} = int, context) do
     debug(int, "-> START")
-    enter_states(int, initial, context)
+    enter_states(int, [initial], context)
   end
 
   @doc """
@@ -63,10 +63,10 @@ defmodule StateChart.Interpreter do
         stop(int, context)
       {[], %{internal_events: %Queue{size: 0}} = int} ->
         case invoke_states(int, context) do
-          %{internal_events: %Queue{size: 0}} = int ->
+          {%{internal_events: %Queue{size: 0}} = int, context} ->
             debug(int, "<- AWAIT")
             {:await, int, context}
-          int ->
+          {int, context} ->
             resume(int, context)
         end
       {[], %{internal_events: events} = int} ->
@@ -123,7 +123,7 @@ defmodule StateChart.Interpreter do
 
   defp select_eventless_transitions(%{configuration: conf, document: document} = int, context) do
     selected = Document.transitions_by(document, conf, fn
-      (%Transition{event: nil} = transition) ->
+      (%Transition{events: []} = transition) ->
         Transition.on_condition(transition, context)
       (_) ->
         false

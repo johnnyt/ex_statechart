@@ -1,8 +1,8 @@
 defmodule StateChart.Document.Transition do
   use StateChart.Definition do
     field(:ref, :source, 1)
-    repeated(:ref, :target, 2)
-    repeated(:string, :event, 3)
+    repeated(:ref, :targets, 2, [:target])
+    repeated(:string, :events, 3, [:event])
     field(:any, :condition, 4, [:cond])
     enum Type, :type, 5, [
       external: 0,
@@ -14,10 +14,10 @@ defmodule StateChart.Document.Transition do
     field(:ref, :scope, 10)
   end
 
-  def match?(%{event: []}, name) do
+  def match?(%{events: []}, _name) do
     true
   end
-  def match?(%{event: events}, name) do
+  def match?(%{events: events}, name) do
     Enum.member?(events, name)
   end
 
@@ -29,11 +29,26 @@ defmodule StateChart.Document.Transition do
     d1 >= d2
   end
 
-  def on_condition(%{conditions: conditions}, context) do
-    Enum.all?(conditions, &StateChart.Context.query(context, &1))
+  def on_condition(%{condition: nil}, _) do
+    true
+  end
+  def on_condition(%{condition: condition}, context) do
+    StateChart.Context.query(context, condition)
   end
 
   def on_transition(%{on_transition: on_transition}, context) do
     Enum.reduce(on_transition, context, &StateChart.Context.execute(&2, &1))
+  end
+
+  alias StateChart.Document.Analyzer
+  def finalize(
+    %{source: source, targets: targets, scope: scope} = transition,
+    doc
+  ) do
+    %{transition |
+      source: Analyzer.deref(doc, source),
+      targets: Enum.map(targets, &Analyzer.deref(doc, &1)),
+      scope: Analyzer.deref(doc, scope)
+    }
   end
 end

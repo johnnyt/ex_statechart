@@ -2,32 +2,26 @@ defmodule StateChart.Document.Analyzer do
   alias StateChart.Document.{State,Transition}
   alias StateChart.Runtime.Invoke
 
-  @doc """
-  Traverse the model
-  """
-
-  def analyze(model, root) do
-    model
-    |> traverse(root, [])
-    |> elem(1)
-    |> resolve_references()
+  def ref(%{__states__: s}) do
+    map_size(s)
   end
 
-  def on_enter(model, state, ancestors) do
-    {state, model} = put_state(model, state)
+  def deref(_, nil) do
+    nil
+  end
+  def deref(%{__states__: s}, name) do
+    {:ok, %{ref: ref}} = Map.fetch(s, name)
+    ref
+  end
+
+  def on_enter(doc, state, ancestors) do
+    {state, doc} = put_state(doc, state)
     %{id: id} = state
     ancestors = [id | ancestors]
-    {model, state, ancestors}
+    {doc, state, ancestors}
   end
 
-    # children: [],
-    # initial: nil,
-    # invocations: [],
-    # on_entry: [],
-    # on_exit: [],
-    # transitions: [],
-
-  def on_exit(model, state, children) do
+  def on_exit(doc, state, children) do
     # TODO don't nuke the previous values in the state
     {children, invocations, on_entry, on_exit, transitions} =
       Enum.reduce(children, {[], [], [], [], []}, fn
@@ -45,42 +39,38 @@ defmodule StateChart.Document.Analyzer do
     %{state |
       children: children,
       descendants: descendants,
-      descendants_set: MapSet.new(descendants),
       invocations: invocations,
       on_entry: on_entry,
       on_exit: on_exit,
       transitions: transitions}
     |> handle_initial_composite()
     |> handle_history_composite()
-    |> update_model(model)
+    |> update_doc(doc)
   end
 
-  defp traverse(model, state, ancestors) do
-    {model, %{children: children} = state, ancestors} = on_enter(model, state, ancestors)
-    {children, model} = Enum.map_reduce(children, model, &traverse(&2, &1, ancestors))
-    on_exit(model, state, children)
+  def finalize(doc, _opts) do
+    doc
+    |> finalize_references()
+    |> finalize_initial()
+    |> finalize_states()
   end
 
-  defp put_state(%{initial: nil} = model, %{id: id} = state) do
-    %{model | initial: [%Transition{priority: {0, 0}, scope: id, source: :__start__, target: [id]}]}
+  defp put_state(%{initial: i} = doc, %{id: id} = state) when i in [[], nil] do
+    %{doc | initial: [id]}
     |> put_state(state)
   end
-  defp put_state(%{states: s} = model, %{id: id} = state) do
+  defp put_state(%{__states__: s} = doc, %{id: id} = state) do
     case Map.fetch(s, id) do
       :error ->
-        {state, %{model | states: Map.put(s, id, state)}}
+        {state, %{doc | __states__: Map.put(s, id, state)}}
       _ ->
         raise ArgumentError, "redefinition of state id #{id}"
     end
   end
 
-  defp update_model(%{id: id} = state, %{states: s} = model) do
+  defp update_doc(%{id: id} = state, %{__states__: s} = doc) do
     s = Map.put(s, id, state)
-    {state, %{model | states: s}}
-  end
-
-  def ref(%{states: s}) do
-    map_size(s)
+    {state, %{doc | __states__: s}}
   end
 
   defp handle_initial_composite(%{type: :composite, children: [first | _] = children} = state) do
@@ -99,18 +89,20 @@ defmodule StateChart.Document.Analyzer do
     state
   end
 
-  defp resolve_references(%{states: s} = model) do
+  defp finalize_references(%{__states__: s} = doc) do
     s = s
-    |> Enum.map_reduce(0, fn({id, %{initial: init, transitions: trans, children: children, depth: depth} = state}, idx) ->
-      check_ref(s, init) || raise ArgumentError, "Unable to locate initial state for state: #{id}"
+    |> Enum.map_reduce(0, fn({id, %{initials: init, transitions: trans, children: children, depth: depth} = state}, idx) ->
+      check_refs!(s, init, fn(ref) ->
+        "Unable to locate initial targets for state: #{id} (#{inspect(init)})"
+      end)
 
       idx = idx + 1
-      priority = {depth, idx}
+      priority = idx
 
       {trans, idx} = trans
       |> Enum.map_reduce(idx, fn(transition, idx) ->
-        transition = %{transition | source: id, priority: {depth, idx}}
-        check_targets!(transition, s)
+        transition = %{transition | source: id, depth: depth, priority: idx}
+        transition = check_targets!(transition, s)
         lcca = find_lcca(transition, s)
         {%{transition | scope: get_scope(transition, lcca, s)}, idx + 1}
       end)
@@ -122,7 +114,7 @@ defmodule StateChart.Document.Analyzer do
     |> elem(0)
     |> Enum.into(%{})
 
-    %{model | states: s}
+    %{doc | __states__: s}
   end
 
   defp get_scope(%{targets: [], source: s}, _, _) do
@@ -151,17 +143,41 @@ defmodule StateChart.Document.Analyzer do
     end)
   end
 
-  defp check_targets!(%{source: id, targets: targets}, s) do
-    targets
+  defp check_targets!(%{source: id, targets: []} = t, _s) do
+    %{t | targets: [id]}
+  end
+  defp check_targets!(%{source: id, targets: targets} = t, s) do
+    check_refs!(s, targets, fn(refs) ->
+      "Unable to locate transition targets #{inspect(refs)} for state: #{id}"
+    end)
+    t
+  end
+
+  defp check_refs!(s, list, message) do
+    list
     |> Enum.filter(&!check_ref(s, &1))
     |> case do
       [] ->
-        :ok
+        nil
       refs ->
-        raise ArgumentError, "Unable to locate transition targets #{inspect(refs)} for state: #{id}"
+        raise ArgumentError, message.(refs)
     end
   end
 
   defp check_ref(_, nil), do: true
   defp check_ref(s, id), do: Map.fetch(s, id) != :error
+
+  defp finalize_initial(%{initial: initial} = doc) do
+    targets = Enum.map(initial, &deref(doc, &1))
+    transition = %Transition{targets: targets}
+    %{doc | initial: transition}
+  end
+
+  defp finalize_states(%{__states__: s} = doc) do
+    states = :erlang.make_tuple(map_size(s), nil)
+    states = Enum.reduce(s, states, fn({_, %{ref: ref} = state}, states) ->
+      put_elem(states, ref, State.finalize(state, doc))
+    end)
+    %{doc | states: states, __states__: %{}}
+  end
 end

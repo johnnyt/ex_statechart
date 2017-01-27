@@ -5,18 +5,27 @@ defmodule StateChart.Document do
       late: 1
     ]
     field(map(:var, __MODULE__.Data), :datamodel, 2)
-    repeated(__MODULE__.Transition, :initial, 3)
+    field(__MODULE__.Transition, :initial, 3)
     field(:string, :name, 4)
-    field(map(:ref, __MODULE__.State), :states, 5)
+    repeated(__MODULE__.State, :states, 5)
+
+    private(:__states__, %{})
+
+    computed(:states, fn
+      (%{states: s}) when is_list(s) ->
+        :erlang.list_to_tuple(s)
+      (%{states: s}) when is_tuple(s) ->
+        s
+    end)
   end
 
-  alias __MODULE__.{Analyzer,Query,State,Transition}
+  alias __MODULE__.{Query,State,Transition}
 
   def resolve(_, %State{} = s) do
     s
   end
-  def resolve(%{states: s}, id) do
-    {:ok, state} = Map.fetch(s, id)
+  def resolve(%{states: s}, ref) do
+    {:ok, state} = Map.fetch(s, ref)
     state
   end
 
@@ -110,7 +119,7 @@ defmodule StateChart.Document do
 
   defp add_state_and_descendants(
     %{states: s} = model,
-    %{id: id, type: type, parent: parent, children: children} = state,
+    %{ref: ref, type: type, parent: parent, children: children} = state,
     history,
     {states, configuration, processed} = acc
   ) do
@@ -121,7 +130,7 @@ defmodule StateChart.Document do
       acc = {states, configuration, processed}
 
       if type == :history do
-        case Map.fetch(history, id) do
+        case Map.fetch(history, ref) do
           {:ok, history_states} ->
             Enum.reduce(history_states, acc, &add_state_and_ancestors(model, &1, parent, history, &2))
           _ ->
@@ -155,9 +164,8 @@ defmodule StateChart.Document do
       end
     end
   end
-  defp add_state_and_descendants(%{states: s} = model, id, history, acc) do
-    {:ok, state} = Map.fetch(s, id)
-    add_state_and_descendants(model, state, history, acc)
+  defp add_state_and_descendants(%{states: s} = model, ref, history, acc) do
+    add_state_and_descendants(model, elem(s, ref), history, acc)
   end
 
   @doc """
@@ -167,8 +175,11 @@ defmodule StateChart.Document do
   def exit_states(%{states: s} = model, configuration, transitions) do
     transitions
     |> Stream.filter(fn(%{targets: t}) -> t != [] end)
-    |> Enum.reduce({MapSet.new(), configuration}, fn(%Transition{scope: scope}, acc) ->
-       {:ok, %{id: scope, descendants_set: desc}} = Map.fetch(s, scope)
+    |> Enum.reduce({MapSet.new(), configuration}, fn
+      (%Transition{scope: nil}, acc) ->
+        acc
+      (%Transition{scope: scope}, acc) ->
+        %{ref: scope, descendants_set: desc} = elem(s, scope)
 
         configuration
         |> Stream.filter(&MapSet.member?(desc, &1))
@@ -192,9 +203,6 @@ defmodule StateChart.Document do
   end
 
   defp resolve_list(list, s) do
-    Stream.map(list, fn(id) ->
-      {:ok, state} = Map.fetch(s, id)
-      state
-    end)
+    Stream.map(list, &elem(s, &1))
   end
 end

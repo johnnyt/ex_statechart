@@ -3,12 +3,9 @@ defmodule StateChart.SCXML do
   alias StateChart.{Document,Runtime}
   alias Document.{Analyzer,State,Transition}
 
-  alias __MODULE__.Parser
-  import Parser, except: [parse: 1]
-
   def parse(xml, opts \\ %{models: %{}})
   def parse(xml, opts) when is_binary(xml) do
-    root = Parser.parse(xml)
+    root = __MODULE__.Parser.parse(xml)
     parse(root, opts)
   end
   def parse(root, opts) do
@@ -20,7 +17,7 @@ defmodule StateChart.SCXML do
 
   defp scxml(parent_doc, el, _, opts) do
     attrs = fetch_attrs!(el, %{
-      "initial" => string(),
+      "initial" => string() |> space_list(),
       "name" => string(),
       "xmlns" => "http://www.w3.org/2005/07/scxml" |> required(),
       "version" => 1.0 |> required(),
@@ -31,12 +28,13 @@ defmodule StateChart.SCXML do
     doc = %{Document.new(
       name: attrs["name"]
     ) |
-      datamodel: attrs["datamodel"]
+      datamodel: attrs["datamodel"],
+      initial: attrs["initial"]
     }
 
-    # TODO set initial once we know it
-
     {_, doc} = traverse(doc, el, [], opts, &scxml_child/4)
+
+    doc = Analyzer.finalize(doc, opts)
 
     {doc, parent_doc}
   end
@@ -47,8 +45,8 @@ defmodule StateChart.SCXML do
   defp state(doc, el, ancestors, opts) do
     state = fetch_attrs!(el, %{
       "id" => string(),
-      "initial" => string(),
-      self: Analyzer.ref(doc),
+      "initial" => string() |> space_list(),
+      ref: Analyzer.ref(doc),
       ancestors: ancestors
     }) |> State.new()
 
@@ -64,7 +62,7 @@ defmodule StateChart.SCXML do
     state = fetch_attrs!(el, %{
       "id" => string(),
       type: :parallel,
-      self: Analyzer.ref(doc),
+      ref: Analyzer.ref(doc),
       ancestors: ancestors
     }) |> State.new()
 
@@ -89,16 +87,16 @@ defmodule StateChart.SCXML do
   end
 
   defp initial(doc, el, ancestors, opts) do
-    {children, doc} = traverse(doc, el, ancestors, opts, &initial_child/4)
-
     state = %{
       type: :initial,
-      self: Analyzer.ref(doc),
-      ancestors: ancestors,
-      transitions: children
+      ref: Analyzer.ref(doc),
+      ancestors: ancestors
     } |> State.new()
 
-    {state, doc}
+    {doc, state, ancestors} = Analyzer.on_enter(doc, state, ancestors)
+    {children, doc} = traverse(doc, el, ancestors, opts, &history_child/4)
+    state = %{state | transitions: children}
+    Analyzer.on_exit(doc, state, [])
   end
   defchild initial_child, [:transition]
 
@@ -106,7 +104,7 @@ defmodule StateChart.SCXML do
     state = fetch_attrs!(el, %{
       "id" => string(),
       type: :final,
-      self: Analyzer.ref(doc),
+      ref: Analyzer.ref(doc),
       ancestors: ancestors
     }) |> State.new()
 
@@ -138,9 +136,9 @@ defmodule StateChart.SCXML do
 
     state = %{
       id: attrs["id"],
-      history: attrs["type"],
+      history_type: attrs["type"],
       type: :history,
-      self: Analyzer.ref(doc),
+      ref: Analyzer.ref(doc),
       ancestors: ancestors
     } |> State.new()
 
@@ -157,7 +155,7 @@ defmodule StateChart.SCXML do
     :raise, :if, :foreach, :log, :assign, :script, :send, :cancel
   ], :execute
 
-  defp raise(doc, el, ancestors, _opts) do
+  defp raise(doc, el, _ancestors, _opts) do
     ex = fetch_attrs!(el, %{
       "event" => string() |> required()
     }) |> Runtime.Raise.new()
@@ -208,7 +206,7 @@ defmodule StateChart.SCXML do
     {foreach, doc}
   end
 
-  defp log(doc, el, ancestors, _opts) do
+  defp log(doc, el, _ancestors, _opts) do
     ex = fetch_attrs!(el, %{
       "label" => string() |> default(""),
       "expr" => expr(doc)
@@ -224,7 +222,7 @@ defmodule StateChart.SCXML do
   end
   defchild datamodel_child, [:data]
 
-  defp data(doc, el, ancestors, opts) do
+  defp data(doc, el, _ancestors, _opts) do
     _data = fetch_attrs!(el, %{
       "id" => string() |> required(),
       "src" => uri(),
@@ -235,7 +233,7 @@ defmodule StateChart.SCXML do
     {nil, doc}
   end
 
-  defp assign(doc, el, ancestors, opts) do
+  defp assign(doc, el, _ancestors, _opts) do
     _data = fetch_attrs!(el, %{
       "location" => path_expr(doc) |> required(),
       "expr" => expr(doc)
@@ -245,13 +243,13 @@ defmodule StateChart.SCXML do
   end
 
   defp donedata(doc, el, ancestors, opts) do
-    {children, doc} = traverse(doc, el, ancestors, opts, &datamodel_child/4)
+    {children, doc} = traverse(doc, el, ancestors, opts, &donedata_child/4)
     # TODO
     {nil, doc}
   end
   defchild donedata_child, [:content, :param]
 
-  defp content(doc, el, ancestors, opts) do
+  defp content(doc, el, _ancestors, _opts) do
     _data = fetch_attrs!(el, %{
       "expr" => expr(doc)
     })
@@ -259,7 +257,7 @@ defmodule StateChart.SCXML do
     {nil, doc}
   end
 
-  defp param(doc, el, ancestors, opts) do
+  defp param(doc, el, _ancestors, _opts) do
     _data = fetch_attrs!(el, %{
       "name" => string(),
       "expr" => expr(doc),
@@ -269,7 +267,7 @@ defmodule StateChart.SCXML do
     {nil, doc}
   end
 
-  defp script(doc, el, ancestors, opts) do
+  defp script(doc, el, _ancestors, _opts) do
     _data = fetch_attrs!(el, %{
       "src" => uri()
     })
@@ -299,7 +297,7 @@ defmodule StateChart.SCXML do
   end
   defchild send_child, [:content, :param]
 
-  defp cancel(doc, el, ancestors, _opts) do
+  defp cancel(doc, el, _ancestors, _opts) do
     attrs = fetch_attrs!(el, %{
       "sendid" => string(),
       "sendidexpr" => expr(doc)
@@ -343,7 +341,7 @@ defmodule StateChart.SCXML do
       end)
       |> case do
         nil ->
-          nil
+          []
         acc ->
           :lists.reverse(acc)
       end

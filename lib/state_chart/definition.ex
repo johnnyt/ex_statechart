@@ -1,6 +1,11 @@
 defmodule StateChart.Definition do
   defmacro __using__([do: block]) do
     quote do
+      def __compute_fields__(model) do
+        model
+      end
+      defoverridable __compute_fields__: 1
+
       import unquote(__MODULE__)
       var!(fields) = []
       var!(struct) = []
@@ -11,9 +16,12 @@ defmodule StateChart.Definition do
       def new(%__MODULE__{} = model) do
         # TODO should we recast everything just to make sure it's all valid?
         model
+        |> __compute_fields__()
       end
       def new(params) do
-        Enum.reduce(params, %__MODULE__{}, &cast_field/2)
+        params
+        |> Enum.reduce(%__MODULE__{}, &cast_field/2)
+        |> __compute_fields__()
       end
       defoverridable new: 1
 
@@ -77,16 +85,19 @@ defmodule StateChart.Definition do
     end
   end
 
-  defmacro repeated(type, name, id) do
+  defmacro repeated(type, name, id, aliases \\ []) do
     quote bind_quoted: [
       type: type,
       name: name,
-      id: id
+      id: id,
+      aliases: aliases
     ] do
       var!(struct) = [{name, []} | var!(struct)]
       var!(fields) = [{type, name, id, :many} | var!(fields)]
 
-      names = [name, to_string(name)]
+      names = [name, to_string(name) | Enum.flat_map(aliases, fn(a) ->
+        [a, to_string(a)]
+      end)]
 
       defp cast_field({k, nil}, model) when k in unquote(names) do
         model
@@ -98,9 +109,31 @@ defmodule StateChart.Definition do
   end
 
   defmacro computed(name, fun) do
-    quote do
-      var!(struct) = [{unquote(name), nil} | var!(struct)]
-      # TODO execute function
+    quote bind_quoted: [
+      name: name,
+      fun: Macro.escape(fun)
+    ] do
+      var!(struct) = [{name, nil} | var!(struct)]
+
+      {:fn, _, clauses} = fun
+      def __compute_fields__(model) do
+        model = super(model)
+        %{model | unquote(name) => (case model, do: unquote(clauses))}
+      end
+      defoverridable __compute_fields__: 1
+
+      defp cast_field({k, v}, model) when k in unquote([name, to_string(name)]) do
+        %{model | unquote(name) => v}
+      end
+    end
+  end
+
+  defmacro private(name, value \\ nil) do
+    quote bind_quoted: [
+      name: name,
+      value: value
+    ] do
+      var!(struct) = [{name, value} | var!(struct)]
     end
   end
 

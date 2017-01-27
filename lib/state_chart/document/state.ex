@@ -1,30 +1,38 @@
 defmodule StateChart.Document.State do
   use StateChart.Definition do
     field(:string, :id, 1)
-    field(:ref, :self, 1)
-    enum Type, :type, 2, [
-      composite: 0,
-      initial: 1,
-      history: 2,
-      final: 3,
-      basic: 4,
-      parallel: 5
+    field(:ref, :ref, 2)
+    enum Type, :type, 3, [
+      basic: 0,
+      composite: 1,
+      parallel: 2,
+      history: 3,
+      initial: 4,
+      final: 5
     ]
-    field(:ref, :initial, 3)
-    repeated(StateChart.Runtime.Invoke, :invocations, 4)
-    repeated(:any, :on_entry, 4)
-    repeated(:any, :on_exit, 5)
-    repeated(Model.Transition, :transitions, 6)
-    repeated(:ref, :children, 8)
-    repeated(:ref, :ancestors, 9)
-    repeated(:ref, :descendants, 10)
-    field(:ref, :parent, 11)
-    field(:uint32, :priority, 13)
-    enum History, :history, 14, [
+    repeated(:ref, :initials, 4, [:initial])
+    repeated(StateChart.Runtime.Invoke, :invocations, 5)
+    repeated(:any, :on_entry, 6)
+    repeated(:any, :on_exit, 7)
+    repeated(Model.Transition, :transitions, 8)
+    repeated(:ref, :children, 9)
+    repeated(:ref, :ancestors, 10)
+    repeated(:ref, :descendants, 11)
+    field(:ref, :parent, 12)
+    field(:uint32, :depth, 13)
+    field(:uint32, :priority, 14)
+    field(:ref, :history, 15)
+    enum History, :history_type, 16, [
       shallow: 0,
       deep: 1
     ]
 
+    computed(:id, fn
+      (%{id: "", ref: ref}) ->
+        ref
+      (%{id: id}) ->
+        id
+    end)
     computed(:ancestors_set, fn(%{ancestors: d}) ->
       MapSet.new(d)
     end)
@@ -33,12 +41,6 @@ defmodule StateChart.Document.State do
     end)
     computed(:depth, fn(%{ancestors_set: s}) ->
       MapSet.size(s)
-    end)
-    computed(:id, fn
-      (%{id: "", ref: ref}) ->
-        {:__computed__, ref}
-      (%{id: id}) ->
-        id
     end)
   end
 
@@ -56,5 +58,31 @@ defmodule StateChart.Document.State do
 
   def on_exit(%{on_exit: on_exit}, context) do
     Enum.reduce(on_exit, context, &StateChart.Context.execute(&2, &1))
+  end
+
+  alias StateChart.Document.{Analyzer,Transition}
+  def finalize(
+    %{initials: initials,
+      transitions: transitions,
+      children: children,
+      ancestors: ancestors,
+      descendants: descendants,
+      parent: parent,
+      history: history} = state,
+    doc
+  ) do
+    ancestors = Enum.map(ancestors, &Analyzer.deref(doc, &1))
+    descendants = Enum.map(descendants, &Analyzer.deref(doc, &1))
+    %{state |
+      initials: Enum.map(initials, &Analyzer.deref(doc, &1)),
+      transitions: Enum.map(transitions, &Transition.finalize(&1, doc)),
+      children: Enum.map(children, &Analyzer.deref(doc, &1)),
+      ancestors: ancestors,
+      ancestors_set: MapSet.new(ancestors),
+      descendants: descendants,
+      descendants_set: MapSet.new(descendants),
+      parent: Analyzer.deref(doc, parent),
+      history: Analyzer.deref(doc, history)
+    }
   end
 end

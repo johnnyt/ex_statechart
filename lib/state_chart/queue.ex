@@ -13,7 +13,7 @@ defmodule StateChart.Queue do
     %__MODULE__{data: q, size: s + 1}
   end
 
-  def dequeue(%{data: q, size: 0}) do
+  def dequeue(%{size: 0}) do
     :empty
   end
   def dequeue(%{data: q, size: s}) do
